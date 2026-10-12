@@ -1,0 +1,97 @@
+name: Windows Runner Setup
+
+on:
+  workflow_dispatch:
+    inputs:
+      instance_number:
+        description: "Instance Number (1-10)"
+        required: true
+        default: "1"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: System Information
+        shell: pwsh
+        run: |
+          Write-Host "=== WINDOWS RUNNER ===" -ForegroundColor Green
+          Write-Host "Instance: ${{ inputs.instance_number }}"
+          Write-Host "Runner: $env:RUNNER_NAME"
+          Get-ComputerInfo |
+            Select-Object WindowsProductName, WindowsVersion
+          Get-CimInstance Win32_Processor |
+            Select-Object Name, NumberOfCores,
+              NumberOfLogicalProcessors
+
+      - name: Install Utilities
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $apps = @(
+            @{
+              Name = "Chrome"
+              Url = "https://dl.google.com/chrome/install/latest/chrome_installer.exe"
+              Args = "/silent /install"
+            },
+            @{
+              Name = "7-Zip"
+              Url = "https://www.7-zip.org/a/7z2409-x64.exe"
+              Args = "/S"
+            }
+          )
+
+          foreach ($app in $apps) {
+            $installer = Join-Path $env:TEMP (
+              "$($app.Name -replace '[^a-zA-Z0-9]', '')-setup.exe"
+            )
+
+            try {
+              Write-Host "Downloading $($app.Name)..."
+              Invoke-WebRequest -Uri $app.Url `
+                -OutFile $installer
+
+              $process = Start-Process `
+                -FilePath $installer `
+                -ArgumentList $app.Args `
+                -Wait -PassThru
+
+              if ($process.ExitCode -ne 0) {
+                throw "$($app.Name) installer exited with code $($process.ExitCode)"
+              }
+
+              Write-Host "$($app.Name) installation completed."
+            }
+            finally {
+              Remove-Item $installer -Force `
+                -ErrorAction SilentlyContinue
+            }
+          }
+
+      - name: Validate Tailscale Secret
+        shell: pwsh
+        env:
+          TS_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TS_AUTH_KEY)) {
+            throw "Missing TAILSCALE_AUTH_KEY repository secret."
+          }
+
+          Write-Host "Tailscale secret is configured."
+
+      - name: Session Information
+        shell: pwsh
+        run: |
+          Write-Host "Runner setup completed."
+          Write-Host "GitHub-hosted runners are temporary."
+          Write-Host "Job timeout: 360 minutes."
